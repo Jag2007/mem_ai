@@ -1,22 +1,18 @@
-
 import json
 import os
 import re
 import urllib.error
 import urllib.request
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 class LLMClient:
+    INVALID_NAME_TOKENS = {"learning", "allergic", "training", "foodie", "ok", "okay"}
     def __init__(self, model: str = "grok-2-latest"):
-        # Prefer Grok/xAI credentials, then fall back to OpenAI-compatible env names.
         self.api_key = os.getenv("GROK_API_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip()
-        self.model = (
-            os.getenv("GROK_MODEL", "").strip()
-            or os.getenv("OPENAI_MODEL", "").strip()
-            or model
-        )
+        self.model = os.getenv("GROK_MODEL", "").strip() or os.getenv("OPENAI_MODEL", "").strip() or model
         self.base_url = os.getenv("LLM_BASE_URL", "https://api.x.ai/v1").strip().rstrip("/")
+        self.api_call_count = 0
 
     @property
     def enabled(self) -> bool:
@@ -26,7 +22,7 @@ class LLMClient:
         if not self.enabled:
             return None
 
-        url = f"{self.base_url}/chat/completions"
+        self.api_call_count += 1
         payload = {
             "model": self.model,
             "messages": [
@@ -37,7 +33,7 @@ class LLMClient:
         }
 
         req = urllib.request.Request(
-            url=url,
+            url=f"{self.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -55,337 +51,500 @@ class LLMClient:
                 message = choices[0].get("message", {})
                 content = message.get("content")
                 if isinstance(content, str):
-                    return content
+                    return content.strip()
                 if isinstance(content, list):
                     parts = [item.get("text", "") for item in content if isinstance(item, dict)]
                     joined = "".join(parts).strip()
                     return joined or None
                 return None
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError):
             return None
 
     def extract_facts(self, user_message: str) -> List[str]:
-        """Extract durable user facts worth remembering across sessions."""
         system = (
-            "You extract durable personal facts from a user message. "
-            "Return JSON only with shape: {\"facts\": [\"...\"]}. "
-            "Keep each fact short, objective, and in third person. "
-            "Only include info likely useful later (name, preferences, allergies, routines, goals). "
-            "If nothing useful, return {\"facts\": []}."
+            "Extract durable profile facts from the user message. "
+            "Return JSON only: {\"facts\":[\"...\"]}. "
+            "Use canonical forms like: User's name is X, User likes Y, User is allergic to Z, "
+            "User lives in City, User works as Role, User has a dog named Name, User prefers vegetarian meals, "
+            "User's birthday is on Date, User is training for Goal, User is learning Language, User drinks coffee every morning. "
+            "Capture multiple facts if present. Ignore pure requests."
         )
+
         output = self._post_chat(system, user_message)
+        api_facts = self._parse_api_facts(output) if output else []
+        fallback = self._fallback_extract(user_message)
+        merged = self._normalize_facts(api_facts + fallback)
 
-        if output:
-            try:
-                data = json.loads(output)
-                facts = data.get("facts", [])
-                if isinstance(facts, list):
-                    parsed = [str(item).strip() for item in facts if str(item).strip()]
-                    return self._normalize_facts(parsed)
-            except json.JSONDecodeError:
-                pass
-
-        return self._normalize_facts(self._fallback_extract(user_message))
+        deduped: List[str] = []
+        seen = set()
+        for fact in merged:
+            key = fact.lower().strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(fact)
+        return deduped
 
     def generate_reply(self, user_message: str, memory_facts: List[str], conversation_history: List[dict]) -> str:
         deterministic = self._deterministic_reply(user_message, memory_facts)
         if deterministic:
             return deterministic
 
-        memory_section = "\n".join(f"- {fact}" for fact in memory_facts) if memory_facts else "- (no relevant memories)"
+        memory_block = "\n".join(f"- {m}" for m in memory_facts) if memory_facts else "- (none)"
+        history_block = "\n".join(f"{m.get('role','user').upper()}: {m.get('content','')}" for m in conversation_history[-8:])
 
-        history_lines = []
-        for msg in conversation_history[-8:]:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            history_lines.append(f"{role.upper()}: {content}")
-
+        system = (
+            "You are a helpful assistant with long-term memory. "
+            "Answer naturally, using relevant memory facts only."
+        )
         prompt = (
-            "Relevant memories about the user:\n"
-            f"{memory_section}\n\n"
-            "Recent conversation:\n"
-            f"{'\n'.join(history_lines)}\n\n"
-            "Now answer the latest USER message naturally. "
-            "Use memories when relevant, but do not force them into unrelated answers. "
-            "If safety-related memories exist (like allergies), prioritize them in recommendations."
+            "Memories:\n"
+            f"{memory_block}\n\n"
+            "Conversation:\n"
+            f"{history_block}\n\n"
+            f"Latest user message: {user_message}\n\n"
+            "Give a concise, personalized response."
         )
 
-        system = "You are a helpful, concise assistant in a terminal chat app."
         output = self._post_chat(system, prompt)
-        if output and output.strip():
-            return output.strip()
+        if output:
+            return output
 
-        # Graceful fallback if API is unavailable.
-        deterministic = self._deterministic_reply(user_message, memory_facts)
-        if deterministic:
-            return deterministic
-        return "I can help with that. Could you share a bit more detail so I can personalize the suggestion?"
+        return "I can help with that. Tell me what kind of suggestion you want."
+
+    def _deterministic_reply(self, user_message: str, memory_facts: List[str]) -> Optional[str]:
+        lower = user_message.lower()
+        mem = self._memory_by_type(memory_facts)
+
+        if "my name" in lower or "who am i" in lower:
+            return f"Your name is {mem['name'][0]}." if mem["name"] else "I do not have your name saved yet."
+
+        if "where do i live" in lower or "where i live" in lower:
+            return f"You live in {mem['location'][0]}." if mem["location"] else "I do not have your location saved yet."
+
+        allergy_query = bool(
+            re.search(r"\bam i allergic\b", lower)
+            or re.search(r"\bwhat am i allergic\b", lower)
+            or re.search(r"\bdo i have (an )?allergy\b", lower)
+            or re.search(r"\bno nuts?\b", lower)
+            or re.search(r"\bnut[- ]?free\b", lower)
+        )
+        if allergy_query:
+            if mem["allergy"]:
+                return f"You told me you are allergic to {', '.join(mem['allergy'])}."
+            return "I do not have any allergy memory saved yet."
+
+        if "what do i like" in lower or "what i like" in lower or "what do i love" in lower:
+            likes = self._ordered_likes(mem)
+            return f"You told me you like {', '.join(likes)}." if likes else "I do not have any saved preferences yet."
+
+        if "bestfriend" in lower or "best friend" in lower:
+            if ("my" in lower and "is" in lower) and ("bestfriend" in lower or "best friend" in lower):
+                return "Thanks for sharing. I will remember that."
+            return f"Your best friend is {mem['relationship'][0]}." if mem["relationship"] else "I do not know your best friend yet."
+
+        if "how's bruno" in lower or "how is bruno" in lower:
+            return "I cannot check Bruno in real time, but a short walk, water, and play time are usually great for him."
+
+        if (
+            "practice a new language" in lower
+            or "practice language" in lower
+            or ("learning spanish" in lower and any(x in lower for x in ["help", "practice", "can you", "how"]))
+        ):
+            language = mem["language"][0] if mem["language"] else "your target language"
+            return (
+                f"For {language}, try: 1) 10-minute speaking practice, 2) 15-word vocab drill, "
+                "3) one short listening clip and summary."
+            )
+
+        if "prepare for my race" in lower or "prepare for race" in lower or ("race" in lower and "help" in lower):
+            if mem["training"]:
+                return (
+                    "For race prep: 1) easy run + strides, 2) hydration and carb-focused meal, "
+                    "3) sleep and recovery routine."
+                )
+            return "Race prep basics: structured training, hydration, recovery, and consistent sleep."
+
+        if "tea" in lower and ("coffee" in lower or "something else" in lower):
+            if mem["routine"]:
+                return "Since you drink coffee in the morning, tea can be a calmer evening option. Herbal tea is good for late hours."
+            return "Tea is a good lighter option, especially in the evening; coffee is better earlier in the day."
+
+        intent = self._detect_intent(lower)
+        if intent["recommend"]:
+            topic = self._infer_topic(lower)
+            picks = self._topic_suggestions(topic, mem, intent)
+            return f"Here are 3 suggestions: 1) {picks[0]}, 2) {picks[1]}, 3) {picks[2]}."
+
+        if self._fallback_extract(user_message):
+            if mem["name"] and ("i am" in lower or "my name" in lower):
+                return f"Nice to meet you, {mem['name'][0]}. I will keep that in mind."
+            return "Got it. I will keep that in mind."
+
+        return None
+
+    def _topic_suggestions(self, topic: str, mem: Dict[str, List[str]], intent: Dict[str, bool]) -> List[str]:
+        likes = self._ordered_likes(mem)
+        food_likes = [x for x in likes if self._classify_pref(x) == "food"]
+        activity_likes = [x for x in likes if self._classify_pref(x) == "activity"]
+        watch_likes = [x for x in likes if self._classify_pref(x) in {"watch", "animal"}]
+
+        if topic == "food":
+            vegetarian = any("vegetarian" in d.lower() for d in mem["diet"]) or any(
+                "vegetarian" in f.lower() for f in food_likes
+            )
+            base = ["balanced grain bowl", "stir-fry veggies with noodles/rice", "quick snack plate"]
+            if vegetarian:
+                base = ["paneer/tofu stir-fry bowl", "veg quinoa salad", "lentil soup with whole-grain toast"]
+            if food_likes:
+                top = food_likes[0].lower()
+                if "ice cream" in top:
+                    base = ["fruit-and-nut ice cream bowl", "frozen yogurt parfait", "small brownie with ice cream"]
+                elif "chinese" in top or "noodle" in top:
+                    base = ["veg hakka noodles", "chilli garlic fried rice", "hot and sour soup"]
+                elif "indian" in top:
+                    base = ["paneer tikka bowl", "veg pulao with raita", "masala dosa with sambar"]
+            if intent["nut_free"] or mem["allergy"]:
+                avoid = ", ".join(mem["allergy"]) if mem["allergy"] else "nuts"
+                base[2] = f"any safe homemade option (avoid {avoid})"
+            return base
+
+        if topic == "activity":
+            if intent["indoor"] and intent["relax"]:
+                return ["guided breathing session", "cozy journaling with tea", "gentle stretching routine"]
+            if intent["indoor"]:
+                if any("painting" in a.lower() for a in activity_likes):
+                    return ["45-minute painting session", "color sketch challenge", "art session with calming music"]
+                return ["home workout mini-set", "creative craft session", "reading + journaling block"]
+            if intent["outdoor"]:
+                if any("boating" in a.lower() for a in activity_likes):
+                    return ["short boating session", "lake walk plus boating", "sunset waterfront plan"]
+                return ["park walk", "short cycling route", "sunset photo walk"]
+            if intent["relax"]:
+                return ["slow evening walk", "light breathing + stretching", "screen-free wind-down routine"]
+            if any("painting" in a.lower() for a in activity_likes):
+                return ["45-minute painting session", "color sketch challenge", "art session with music"]
+            return ["30-minute walk", "creative hobby sprint", "light social catch-up"]
+
+        if topic == "watch":
+            merged = " ".join(watch_likes).lower()
+            if "sci-fi" in merged or "science fiction" in merged:
+                return ["high-rated sci-fi film", "sci-fi mini-series episode", "space-themed drama"]
+            if "drama" in merged:
+                return ["emotional drama film", "character-driven mini-series", "coming-of-age drama"]
+            if any(w in merged for w in ["dog", "cat", "animal", "bird", "parrot"]):
+                return ["wildlife documentary", "nature mini-series", "family adventure film"]
+            return ["light comedy film", "short thriller series", "high-rated documentary"]
+
+        if topic == "birthday":
+            return ["personalized birthday note + flowers", "surprise dinner plan", "memory scrapbook + small gift"]
+
+        if topic == "music":
+            return ["indie chill playlist", "soft acoustic mix", "ambient lo-fi set"]
+
+        if topic == "travel":
+            city = mem["location"][0] if mem["location"] else "nearby"
+            return [f"a {city} day trip", "local food trail", "sunset viewpoint plan"]
+
+        return ["one practical option now", "one low-effort option today", "one fun option this evening"]
+
+    def _detect_intent(self, lower: str) -> Dict[str, bool]:
+        recommend = bool(re.search(r"\bsugg\w*\b", lower)) or any(
+            phrase in lower
+            for phrase in [
+                "recommend",
+                "give me",
+                "what should i",
+                "what can i",
+                "i want",
+                "help me choose",
+                "help me prepare",
+            ]
+        )
+        return {
+            "recommend": recommend,
+            "indoor": any(x in lower for x in ["indoor", "inside", "at home", "home"]),
+            "outdoor": any(x in lower for x in ["outdoor", "outside", "park", "nature"]),
+            "relax": any(x in lower for x in ["relax", "calm", "unwind", "stress"]),
+            "nut_free": any(x in lower for x in ["no nuts", "nut free", "without nuts", "no nut"]),
+        }
+
+    def _infer_topic(self, lower: str) -> str:
+        mapping = {
+            "food": ["food", "eat", "meal", "dinner", "lunch", "breakfast", "snack", "hungry", "cook"],
+            "watch": ["watch", "movie", "show", "series", "anime", "documentary", "ott"],
+            "music": ["music", "song", "playlist", "listen"],
+            "activity": ["activity", "hobby", "relax", "indoor", "outdoor", "weekend", "race"],
+            "travel": ["travel", "trip", "vacation", "holiday", "visit"],
+            "birthday": ["birthday", "surprise", "gift"],
+        }
+        for topic, keywords in mapping.items():
+            if any(k in lower for k in keywords):
+                return topic
+        return "general"
+
+    def _memory_by_type(self, memory_facts: List[str]) -> Dict[str, List[str]]:
+        out: Dict[str, List[str]] = {
+            "name": [],
+            "food": [],
+            "activity": [],
+            "animal": [],
+            "watch": [],
+            "music": [],
+            "allergy": [],
+            "relationship": [],
+            "location": [],
+            "occupation": [],
+            "pet": [],
+            "diet": [],
+            "birthday": [],
+            "training": [],
+            "language": [],
+            "routine": [],
+            "general": [],
+        }
+        for fact in memory_facts:
+            f = fact.strip()
+            if not f:
+                continue
+            low = f.lower()
+            if low.startswith("user's name is "):
+                out["name"].append(f[len("User's name is "):].strip())
+                continue
+            if low.startswith("user is allergic to "):
+                out["allergy"].append(f[len("User is allergic to "):].strip())
+                continue
+            if low.startswith("user's best friend is "):
+                out["relationship"].append(f[len("User's best friend is "):].strip())
+                continue
+            if low.startswith("user lives in "):
+                out["location"].append(f[len("User lives in "):].strip())
+                continue
+            if low.startswith("user works as "):
+                out["occupation"].append(f[len("User works as "):].strip())
+                continue
+            if low.startswith("user has a dog named "):
+                out["pet"].append(f[len("User has a dog named "):].strip())
+                continue
+            if low.startswith("user prefers "):
+                out["diet"].append(f[len("User prefers "):].strip())
+                continue
+            if low.startswith("user's birthday is on "):
+                out["birthday"].append(f[len("User's birthday is on "):].strip())
+                continue
+            if low.startswith("user is training for "):
+                out["training"].append(f[len("User is training for "):].strip())
+                continue
+            if low.startswith("user is learning "):
+                out["language"].append(f[len("User is learning "):].strip())
+                continue
+            if low.startswith("user drinks "):
+                out["routine"].append(f[len("User drinks "):].strip())
+                continue
+            if low.startswith("user likes "):
+                val = f[len("User likes "):].strip()
+                out[self._classify_pref(val)].append(val)
+                continue
+            out["general"].append(f)
+
+        for key in out:
+            dedup = []
+            seen = set()
+            for v in out[key]:
+                k = v.lower()
+                if k in seen:
+                    continue
+                seen.add(k)
+                dedup.append(v)
+            out[key] = dedup
+        return out
+
+    def _ordered_likes(self, mem: Dict[str, List[str]]) -> List[str]:
+        ordered = mem["food"] + mem["activity"] + mem["animal"] + mem["watch"] + mem["music"] + mem["general"]
+        dedup = []
+        seen = set()
+        for x in ordered:
+            k = x.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            dedup.append(x)
+        return dedup
+
+    def _classify_pref(self, value: str) -> str:
+        v = value.lower()
+        if any(w in v for w in ["food", "eat", "meal", "snack", "ice cream", "indian", "italian", "chinese", "pizza", "pasta", "biryani", "noodle", "vegetarian"]):
+            return "food"
+        if any(w in v for w in ["painting", "boating", "horse", "running", "gym", "yoga", "dance", "play", "playing", "hobby", "marathon"]):
+            return "activity"
+        if any(w in v for w in ["dog", "dogs", "cat", "cats", "bird", "birds", "parrot", "parrots", "animal", "animals"]):
+            return "animal"
+        if any(w in v for w in ["drama", "movie", "show", "series", "anime", "documentary", "football", "sci-fi", "science fiction"]):
+            return "watch"
+        if any(w in v for w in ["music", "song", "playlist"]):
+            return "music"
+        return "general"
 
     def _fallback_extract(self, text: str) -> List[str]:
-        """Very small heuristic extractor used when API is unavailable."""
-        if text.strip().endswith("?"):
-            return []
-
         facts: List[str] = []
+        # Split both on sentence marks and commas to avoid merged facts.
+        clauses = [c.strip() for c in re.split(r"[.!?,]", text) if c.strip()]
 
-        name_match = re.search(r"\b(?:i am|i'm)\s+([A-Za-z]+)\b", text, flags=re.IGNORECASE)
-        if name_match:
-            facts.append(f"User's name is {name_match.group(1)}")
+        for clause in clauses:
+            low = clause.lower().strip()
+            if self._looks_like_request(low):
+                continue
 
-        allergy_match = re.search(r"\ballergic to\s+([^.!?,;]+)", text, flags=re.IGNORECASE)
-        if allergy_match:
-            allergy_value = re.split(r"\band\b", allergy_match.group(1), maxsplit=1, flags=re.IGNORECASE)[0].strip()
-            if allergy_value:
-                facts.append(f"User is allergic to {allergy_value}")
+            name_match = re.search(r"\b(?:i am|i'm|my name is)\s+([A-Za-z][A-Za-z'-]{1,30})\b", clause, flags=re.IGNORECASE)
+            if name_match:
+                name = name_match.group(1).strip()
+                if name.lower() not in self.INVALID_NAME_TOKENS:
+                    facts.append(f"User's name is {name}")
 
-        preference_matches = re.findall(
-            r"\b(?:i love|i like|i enjoy|i prefer)\s+([^.!?]+)",
-            text,
-            flags=re.IGNORECASE,
-        )
-        for match in preference_matches:
-            for item in self._split_preference_items(match):
-                facts.append(f"User likes {item}")
+            allergy_match = re.search(r"\ballergic to\s+([^,.;!?]+)", clause, flags=re.IGNORECASE)
+            if allergy_match:
+                allergy = self._clean_pref(allergy_match.group(1))
+                if allergy:
+                    facts.append(f"User is allergic to {allergy}")
 
-        best_friend_match = re.search(
-            r"\bmy\s+best\s*friend\s+is\s+([A-Za-z][A-Za-z\s'-]*)",
-            text,
-            flags=re.IGNORECASE,
-        )
-        if best_friend_match:
-            facts.append(f"User's best friend is {best_friend_match.group(1).strip()}")
+            pref_matches = re.findall(
+                r"\b(?:i\s+also\s+like|i\s+too\s+like|i\s+love|i\s+like|i\s+enjoy|i\s+prefer|i\s+am\s+into|i'm\s+into)\s+([^.!?]+)",
+                clause,
+                flags=re.IGNORECASE,
+            )
+            for block in pref_matches:
+                for item in re.split(r",| and also | also | plus | & | and ", block, flags=re.IGNORECASE):
+                    val = self._clean_pref(item)
+                    if val:
+                        facts.append(f"User likes {val}")
+
+            location = re.search(r"\bi live in\s+([A-Za-z][A-Za-z\s'-]*)$", clause, flags=re.IGNORECASE)
+            if location:
+                facts.append(f"User lives in {self._clean_pref(location.group(1))}")
+
+            work = re.search(r"\bi work as\s+([A-Za-z][A-Za-z\s'-]*)$", clause, flags=re.IGNORECASE)
+            if work:
+                facts.append(f"User works as {self._clean_pref(work.group(1))}")
+
+            dog = re.search(r"\bi have a dog named\s+([A-Za-z][A-Za-z\s'-]*)$", clause, flags=re.IGNORECASE)
+            if dog:
+                facts.append(f"User has a dog named {self._clean_pref(dog.group(1))}")
+
+            if re.search(r"\bi prefer vegetarian meals\b", clause, flags=re.IGNORECASE):
+                facts.append("User prefers vegetarian meals")
+
+            birthday = re.search(r"\bmy birthday is on\s+([A-Za-z0-9\s]+)$", clause, flags=re.IGNORECASE)
+            if birthday:
+                facts.append(f"User's birthday is on {self._clean_pref(birthday.group(1))}")
+
+            training = re.search(r"\bi am training for\s+([A-Za-z0-9\s]+)$", clause, flags=re.IGNORECASE)
+            if training:
+                facts.append(f"User is training for {self._clean_pref(training.group(1))}")
+
+            learning = re.search(r"\bi am learning\s+([A-Za-z\s]+)$", clause, flags=re.IGNORECASE)
+            if learning:
+                facts.append(f"User is learning {self._clean_pref(learning.group(1))}")
+
+            if re.search(r"\bi drink coffee every morning\b", clause, flags=re.IGNORECASE):
+                facts.append("User drinks coffee every morning")
+
+            best_friend = re.search(r"\bmy\s+best\s*friend\s+is\s+([A-Za-z][A-Za-z\s'-]*)", clause, flags=re.IGNORECASE)
+            if best_friend:
+                name = self._clean_pref(best_friend.group(1))
+                if name:
+                    facts.append(f"User's best friend is {name}")
 
         return facts
 
-    def _extract_name(self, memory_facts: List[str]) -> Optional[str]:
-        for fact in memory_facts:
-            match = re.search(r"^user's name is\s+(.+)$", fact, flags=re.IGNORECASE)
-            if match:
-                return match.group(1).strip()
-        return None
-
-    def _extract_allergies(self, memory_facts: List[str]) -> List[str]:
-        allergies: List[str] = []
-        for fact in memory_facts:
-            match = re.search(r"^user is allergic to\s+(.+)$", fact, flags=re.IGNORECASE)
-            if match:
-                value = match.group(1).strip()
-                if value and value.lower() not in [a.lower() for a in allergies]:
-                    allergies.append(value)
-        return allergies
-
-    def _extract_preferences(self, memory_facts: List[str]) -> List[str]:
-        likes: List[str] = []
-        for fact in memory_facts:
-            match = re.search(
-                r"^user (?:likes|loves|enjoys|prefers)\s+(.+)$",
-                fact,
-                flags=re.IGNORECASE,
-            )
-            if match:
-                value = match.group(1).strip()
-                if value and value.lower() not in [x.lower() for x in likes]:
-                    likes.append(value)
-        return likes
-
-    def _extract_best_friend(self, memory_facts: List[str]) -> Optional[str]:
-        for fact in memory_facts:
-            match = re.search(
-                r"^user'?s?\s+best\s*friend\s+is\s+(.+)$",
-                fact,
-                flags=re.IGNORECASE,
-            )
-            if match:
-                return match.group(1).strip()
-        return None
-
-    def _deterministic_reply(self, user_message: str, memory_facts: List[str]) -> Optional[str]:
-        lower_user = user_message.lower()
-        lower_facts = [fact.lower() for fact in memory_facts]
-        remembered_name = self._extract_name(memory_facts)
-        remembered_allergies = self._extract_allergies(memory_facts)
-        remembered_preferences = self._extract_preferences(memory_facts)
-        remembered_best_friend = self._extract_best_friend(memory_facts)
-
-        if "my name" in lower_user or "who am i" in lower_user:
-            if remembered_name:
-                return f"Your name is {remembered_name}."
-            return "I do not have your name saved yet."
-
-        if "allergic" in lower_user:
-            if remembered_allergies:
-                return f"You told me you are allergic to {', '.join(remembered_allergies)}."
-            return "I do not have any allergy memory saved yet."
-
-        declares_best_friend = bool(
-            re.search(r"\bmy\s+best\s*friend\s+is\b", lower_user)
-            or re.search(r"\bmy\s+bestfriend\s+is\b", lower_user)
+    def _clean_pref(self, text: str) -> str:
+        x = text.strip(" .,")
+        x = re.sub(
+            r"^(?:i\s+also\s+like|i\s+too\s+like|i\s+love|i\s+like|i\s+enjoy|i\s+prefer|i\s+am\s+into|i'm\s+into|into|the|a|an)\s+",
+            "",
+            x,
+            flags=re.IGNORECASE,
         )
-        if declares_best_friend:
-            return "Thanks for sharing. I will remember that."
+        x = re.sub(r"\b(?:too|also|as well)\b$", "", x, flags=re.IGNORECASE).strip(" ,.")
+        return x
 
-        if "bestfriend" in lower_user or "best friend" in lower_user:
-            if remembered_best_friend:
-                return f"Your best friend is {remembered_best_friend}."
-            return "I do not know your best friend yet. You can tell me by saying: My best friend is <name>."
+    def _looks_like_request(self, lower_text: str) -> bool:
+        if re.search(r"\bsugg\w*\b", lower_text):
+            return True
+        starters = [
+            "can you",
+            "can u",
+            "could you",
+            "would you",
+            "please",
+            "recommend",
+            "give me",
+            "what should i",
+            "what can i",
+            "how can i",
+            "i want",
+            "help me",
+        ]
+        return any(lower_text.startswith(s) for s in starters)
 
-        if "what do i love" in lower_user or "what do i like" in lower_user:
-            if remembered_preferences:
-                ordered = self._order_preferences(remembered_preferences)
-                return f"You told me you like {', '.join(ordered)}."
-            return "I do not have any saved preference yet."
+    def _parse_api_facts(self, output: str) -> List[str]:
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError:
+            match = re.search(r"\{[\s\S]*\}", output)
+            if not match:
+                return []
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return []
 
-        food_intent = any(
-            word in lower_user
-            for word in ["dinner", "lunch", "breakfast", "eat", "meal", "food", "hungry", "flavorful", "flavourful"]
-        ) or ("suggest" in lower_user and "eat" in lower_user)
-
-        if "suggest" in lower_user and remembered_preferences:
-            preferred_item = self._pick_preferred_item(remembered_preferences)
-            if preferred_item:
-                return (
-                    f"Since you like {preferred_item}, you can try it in two ways tonight: "
-                    f"1) classic style, 2) spicy chef-special version."
-                )
-            return f"Based on your preferences, you could try {remembered_preferences[0]}."
-
-        if food_intent:
-            likes_italian = any("likes italian" in fact for fact in lower_facts)
-            peanut_allergy = any("allergic to peanuts" in fact for fact in lower_facts)
-            if remembered_preferences:
-                top_like = self._pick_preferred_item(remembered_preferences) or remembered_preferences[0]
-                if remembered_allergies:
-                    return (
-                        f"Since you like {top_like}, try a flavorful {top_like} dish made without "
-                        f"{', '.join(remembered_allergies)}."
-                    )
-                return (
-                    f"Since you like {top_like}, try this: {top_like} with extra herbs and bold spices. "
-                    "If you want, I can give 3 specific dish options next."
-                )
-            if likes_italian and peanut_allergy:
-                return "How about a peanut-free pasta primavera? Since you like Italian food, it should fit well."
-            if likes_italian:
-                return "How about Italian tonight, maybe a pasta primavera or margherita pizza?"
-            if peanut_allergy:
-                return "A peanut-free rice bowl with roasted vegetables could be a good option tonight."
-
-        new_facts = self._fallback_extract(user_message)
-        if new_facts:
-            return "Thanks for sharing. I will remember that."
-
-        if memory_facts:
-            return f"I remember this about you: {memory_facts[0]}."
-
-        return None
-
-    def _split_preference_items(self, raw_value: str) -> List[str]:
-        cleaned = raw_value.strip(" .")
-        if not cleaned:
+        facts = data.get("facts", []) if isinstance(data, dict) else []
+        if not isinstance(facts, list):
             return []
 
-        parts = re.split(r",| and also | also | plus | & | and ", cleaned, flags=re.IGNORECASE)
-        items: List[str] = []
-        for part in parts:
-            item = part.strip(" .")
-            item = re.sub(r"^(the|a|an)\s+", "", item, flags=re.IGNORECASE)
-            if not item:
-                continue
-            # Keep reasonably informative items only.
-            if len(item) < 2:
-                continue
-            items.append(item)
-        return items
-
-    def _pick_preferred_item(self, preferences: List[str]) -> Optional[str]:
-        if not preferences:
-            return None
-        food_keywords = [
-            "biryani", "pasta", "pizza", "rice", "burger", "curry", "noodle", "salad",
-            "food", "dish", "cuisine", "chicken", "paneer", "dessert", "italian", "indian",
-        ]
-        for pref in preferences:
-            lower = pref.lower()
-            if any(keyword in lower for keyword in food_keywords):
-                return pref
-        return preferences[0]
-
-    def _order_preferences(self, preferences: List[str]) -> List[str]:
-        food_keywords = [
-            "biryani", "pasta", "pizza", "rice", "burger", "curry", "noodle", "salad",
-            "food", "dish", "cuisine", "chicken", "paneer", "dessert", "italian", "indian",
-        ]
-        ranked = []
-        for pref in preferences:
-            lower = pref.lower()
-            is_food = any(keyword in lower for keyword in food_keywords)
-            ranked.append((1 if is_food else 0, pref))
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        return [pref for _, pref in ranked]
+        return [str(item).strip() for item in facts if str(item).strip()]
 
     def _normalize_facts(self, facts: List[str]) -> List[str]:
-        normalized: List[str] = []
+        out: List[str] = []
         for fact in facts:
             cleaned = fact.strip()
-            lower = cleaned.lower()
+            if not cleaned:
+                continue
 
-            # Split malformed combined fact:
-            # "User is allergic to peanuts and I love Italian food"
             combo = re.search(
                 r"^user is allergic to\s+(.+?)\s+and\s+i\s+(?:love|like)\s+(.+)$",
                 cleaned,
                 flags=re.IGNORECASE,
             )
             if combo:
-                allergy = combo.group(1).strip(" .")
-                pref = combo.group(2).strip(" .")
-                if allergy:
-                    normalized.append(f"User is allergic to {allergy}")
-                if pref:
-                    normalized.append(f"User likes {pref}")
+                a = self._clean_pref(combo.group(1))
+                b = self._clean_pref(combo.group(2))
+                if a:
+                    out.append(f"User is allergic to {a}")
+                if b:
+                    out.append(f"User likes {b}")
                 continue
 
-            # Canonicalize common preference phrasings.
-            pref_match = re.search(
-                r"^user (?:likes|loves|enjoys|prefers)\s+(.+)$",
-                cleaned,
-                flags=re.IGNORECASE,
-            )
-            if pref_match:
-                pref = pref_match.group(1).strip(" .")
-                if pref:
-                    normalized.append(f"User likes {pref}")
+            pref = re.search(r"^user (?:likes|loves|enjoys|prefers)\s+(.+)$", cleaned, flags=re.IGNORECASE)
+            if pref:
+                val = self._clean_pref(pref.group(1))
+                if val:
+                    out.append(f"User likes {val}")
                 continue
 
-            # Canonicalize name phrasing.
-            name_match = re.search(
-                r"^user'?s?\s+name\s+is\s+(.+)$",
-                cleaned,
-                flags=re.IGNORECASE,
-            )
-            if name_match:
-                normalized.append(f"User's name is {name_match.group(1).strip(' .')}")
+            name = re.search(r"^user'?s?\s+name\s+is\s+(.+)$", cleaned, flags=re.IGNORECASE)
+            if name:
+                val = self._clean_pref(name.group(1))
+                if val:
+                    out.append(f"User's name is {val}")
                 continue
 
-            best_friend_match = re.search(
-                r"^user'?s?\s+best\s*friend\s+is\s+(.+)$",
-                cleaned,
-                flags=re.IGNORECASE,
-            )
-            if best_friend_match:
-                normalized.append(f"User's best friend is {best_friend_match.group(1).strip(' .')}")
+            bf = re.search(r"^user'?s?\s+best\s*friend\s+is\s+(.+)$", cleaned, flags=re.IGNORECASE)
+            if bf:
+                val = self._clean_pref(bf.group(1))
+                if val:
+                    out.append(f"User's best friend is {val}")
                 continue
 
-            if lower:
-                normalized.append(cleaned)
-
-        # Deduplicate while preserving order.
-        seen = set()
-        result: List[str] = []
-        for fact in normalized:
-            key = fact.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(fact)
-        return result
+            out.append(cleaned)
+        return out

@@ -98,6 +98,11 @@ def main() -> None:
 
         relevant = memory_store.search(user_message, top_k=5, min_score=0.0)
         relevant_facts = [m.fact for m in relevant]
+        all_facts = [m.fact for m in memory_store.memories]
+        context_facts = []
+        for fact in relevant_facts + all_facts:
+            if fact not in context_facts:
+                context_facts.append(fact)
         profile_intent = any(
             phrase in user_message.lower()
             for phrase in [
@@ -108,13 +113,15 @@ def main() -> None:
                 "allergic",
                 "best friend",
                 "bestfriend",
+                "where do i live",
+                "birthday",
             ]
         )
         if profile_intent:
-            relevant_facts = [m.fact for m in memory_store.memories]
+            context_facts = [m.fact for m in memory_store.memories]
 
         conversation_history.append({"role": "user", "content": user_message})
-        reply = llm.generate_reply(user_message, relevant_facts, conversation_history)
+        reply = llm.generate_reply(user_message, context_facts, conversation_history)
         conversation_history.append({"role": "assistant", "content": reply})
 
         print(f"AI: {reply}")
