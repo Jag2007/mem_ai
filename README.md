@@ -10,9 +10,6 @@ A Python terminal chatbot prototype that can:
 ## Features
 
 - Terminal chat interface.
-- Simple dual-mode web UI:
-  - `Terminal View` (terminal-style chat look)
-  - `Simple UI` (chat bubble look)
 - Automatic memory extraction after each user message.
 - Persistent memory storage in `memories.json`.
 - Memory retrieval with cosine similarity over token-frequency vectors.
@@ -27,10 +24,6 @@ A Python terminal chatbot prototype that can:
   - Main chat loop.
   - Handles commands (`/new`, `/mem`, `/quit`).
   - Orchestrates retrieve -> generate -> extract -> store.
-- `web_ui.py`
-  - Local HTTP server at `http://127.0.0.1:8000`.
-  - Two frontend modes with a mode switch.
-  - Uses the same memory and LLM pipeline as the terminal app.
 - `llm_client.py`
   - `extract_facts(user_message)`: asks the LLM to output durable facts in JSON.
   - `generate_reply(user_message, memory_facts, conversation_history)`: generates answer using relevant memories.
@@ -56,12 +49,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-Create a `.env` file (recommended) or edit `.env.example` (also supported by this app):
+Create a `.env` file (recommended):
+
 ```bash
-cp .env.example .env
+
 ```
 
 Then set:
+
 ```env
 GROK_API_KEY=your_key_here
 GROK_MODEL=grok-2-latest
@@ -70,21 +65,12 @@ LLM_BASE_URL=https://api.x.ai/v1
 
 ## Run
 
-Terminal mode:
-
 ```bash
 python3 app.py
 ```
 
-Web UI mode:
-
-```bash
-python3 web_ui.py
-```
-
-Then open: `http://127.0.0.1:8000`
-
 In-chat commands:
+
 - `/new` start a new session (keeps saved memories)
 - `/mem` list saved memories
 - `/clear` wipe all saved memories
@@ -124,13 +110,13 @@ Session 2 (fresh process or `/new`):
   - Persistent cross-session memory in a human-readable file.
 - Cons:
   - Similarity search is lexical, not true semantic retrieval.
+  - Slight variations in phrasing reduced exact match accuracy.
   - Extraction quality depends on LLM output quality.
   - No privacy filtering/redaction layer.
 
 ## What I'd Improve With More Time
 
-- Use embedding-based retrieval (e.g., OpenAI embeddings + FAISS/Chroma) for better semantic matching.
-- Add confidence scoring + memory aging/pruning.
-- Separate memory categories (profile, preferences, constraints, goals).
-- Add tests for extraction, deduplication, and retrieval ranking.
-- Add optional lightweight web UI.
+- Improve memory extraction quality by refining the prompt and adding basic rule-based validation (e.g., only store long-term facts, avoid storing temporary statements).
+- Add simple deduplication logic to prevent storing the same memory multiple times.
+- Add memory categories (e.g., identity, preferences, health) using lightweight tagging instead of a full schema system.
+- Introduce a basic memory limit (e.g., keep most recent 100 memories) to prevent uncontrolled growth.
