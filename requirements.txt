@@ -1,0 +1,2 @@
+# No mandatory third-party dependency for core runtime.
+# Set OPENAI_API_KEY to use OpenAI Responses API via urllib (standard library).
