@@ -156,6 +156,9 @@ class LLMClient:
             or re.search(r"\blanguage am i learning\b", lower)
             or re.search(r"\bam i learning (any )?language\b", lower)
             or re.search(r"\bwhat language am i learning\b", lower)
+            or re.search(r"\bwhat am i learning\b", lower)
+            or re.search(r"\bam i learning something\b", lower)
+            or re.search(r"\bdo i learn (any )?language\b", lower)
         )
         if language_query and is_question:
             if mem["language"]:
@@ -211,6 +214,25 @@ class LLMClient:
         if ("what do i like" in lower or "what i like" in lower or "what do i love" in lower) and is_question:
             likes = self._ordered_likes(mem)
             return f"You told me you like {', '.join(likes)}." if likes else "I do not have any saved preferences yet."
+
+        if is_question and re.search(r"\bdo i like\b", lower):
+            phrase = re.sub(r".*\bdo i like\b", "", lower).strip(" ?.")
+            if not phrase:
+                likes = self._ordered_likes(mem)
+                return f"You told me you like {', '.join(likes)}." if likes else "I do not have any saved preferences yet."
+
+            likes = self._ordered_likes(mem)
+            match = None
+            for item in likes:
+                item_low = item.lower()
+                if phrase in item_low or item_low in phrase:
+                    match = item
+                    break
+            if match:
+                return f"Yes, you told me you like {match}."
+            if likes:
+                return f"I do not have that exact preference saved. I currently remember: {', '.join(likes)}."
+            return "I do not have any saved preferences yet."
 
         meal_pref_query = bool(
             re.search(r"\bwhich meals?\b", lower)
@@ -582,6 +604,10 @@ class LLMClient:
             if location:
                 facts.append(f"User lives in {self._clean_pref(location.group(1))}")
 
+            study = re.search(r"\bi study\s+([A-Za-z][A-Za-z0-9\s'-]*)$", clause, flags=re.IGNORECASE)
+            if study:
+                facts.append(f"User studies {self._clean_pref(study.group(1))}")
+
             work = re.search(r"\bi work as\s+([A-Za-z][A-Za-z\s'-]*)$", clause, flags=re.IGNORECASE)
             if work:
                 facts.append(f"User works as {self._clean_pref(work.group(1))}")
@@ -589,6 +615,10 @@ class LLMClient:
             dog = re.search(r"\bi have a dog named\s+([A-Za-z][A-Za-z\s'-]*)$", clause, flags=re.IGNORECASE)
             if dog:
                 facts.append(f"User has a dog named {self._clean_pref(dog.group(1))}")
+
+            favorite_food = re.search(r"\bmy favorite food is\s+([A-Za-z][A-Za-z0-9\s'-]*)$", clause, flags=re.IGNORECASE)
+            if favorite_food:
+                facts.append(f"User likes {self._clean_pref(favorite_food.group(1))}")
 
             if re.search(r"\bi prefer vegetarian meals\b", clause, flags=re.IGNORECASE):
                 facts.append("User prefers vegetarian meals")

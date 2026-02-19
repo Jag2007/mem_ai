@@ -10,6 +10,9 @@ A Python terminal chatbot prototype that can:
 ## Features
 
 - Terminal chat interface.
+- Simple dual-mode web UI:
+  - `Terminal View` (terminal-style chat look)
+  - `Simple UI` (chat bubble look)
 - Automatic memory extraction after each user message.
 - Persistent memory storage in `memories.json`.
 - Memory retrieval with cosine similarity over token-frequency vectors.
@@ -24,6 +27,10 @@ A Python terminal chatbot prototype that can:
   - Main chat loop.
   - Handles commands (`/new`, `/mem`, `/quit`).
   - Orchestrates retrieve -> generate -> extract -> store.
+- `web_ui.py`
+  - Local HTTP server at `http://127.0.0.1:8000`.
+  - Two frontend modes with a mode switch.
+  - Uses the same memory and LLM pipeline as the terminal app.
 - `llm_client.py`
   - `extract_facts(user_message)`: asks the LLM to output durable facts in JSON.
   - `generate_reply(user_message, memory_facts, conversation_history)`: generates answer using relevant memories.
@@ -63,9 +70,19 @@ LLM_BASE_URL=https://api.x.ai/v1
 
 ## Run
 
+Terminal mode:
+
 ```bash
 python3 app.py
 ```
+
+Web UI mode:
+
+```bash
+python3 web_ui.py
+```
+
+Then open: `http://127.0.0.1:8000`
 
 In-chat commands:
 - `/new` start a new session (keeps saved memories)
