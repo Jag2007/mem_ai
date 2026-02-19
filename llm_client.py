@@ -61,6 +61,9 @@ class LLMClient:
             return None
 
     def extract_facts(self, user_message: str) -> List[str]:
+        if self._is_pure_question(user_message):
+            return []
+
         system = (
             "Extract durable profile facts from the user message. "
             "Return JSON only: {\"facts\":[\"...\"]}. "
@@ -115,12 +118,83 @@ class LLMClient:
     def _deterministic_reply(self, user_message: str, memory_facts: List[str]) -> Optional[str]:
         lower = user_message.lower()
         mem = self._memory_by_type(memory_facts)
+        is_question = self._looks_like_question(lower)
+        extracted_now = self._fallback_extract(user_message)
+        extracted_mem_now = self._memory_by_type(extracted_now) if extracted_now else None
 
-        if "my name" in lower or "who am i" in lower:
+        # Handle declarative profile updates before any recall logic.
+        if extracted_now and not is_question:
+            if extracted_mem_now and extracted_mem_now["name"]:
+                return f"Nice to meet you, {extracted_mem_now['name'][0]}. I will keep that in mind."
+            return "Got it. I will keep that in mind."
+        if not is_question and re.search(r"\bmy\s+dog\s+is\b", lower):
+            return "Thanks for sharing. I will keep that in mind."
+
+        if (("my name" in lower and "my name is" not in lower) or "who am i" in lower) and is_question:
             return f"Your name is {mem['name'][0]}." if mem["name"] else "I do not have your name saved yet."
 
-        if "where do i live" in lower or "where i live" in lower:
+        if ("where do i live" in lower or "where i live" in lower) and is_question:
             return f"You live in {mem['location'][0]}." if mem["location"] else "I do not have your location saved yet."
+
+        birthday_query = bool(
+            re.search(r"\bwhen\b.*\bbirthday\b", lower)
+            or re.search(r"\bbirthday\b.*\bwhen\b", lower)
+            or "what is my birthday" in lower
+            or "my birthday?" in lower
+            or "birthday date" in lower
+        )
+        if birthday_query and is_question:
+            return (
+                f"Your birthday is on {mem['birthday'][0]}."
+                if mem["birthday"]
+                else "I do not have your birthday saved yet."
+            )
+
+        language_query = bool(
+            re.search(r"\bwhich language\b", lower)
+            or re.search(r"\bwhat language\b", lower)
+            or re.search(r"\blanguage am i learning\b", lower)
+            or re.search(r"\bam i learning (any )?language\b", lower)
+            or re.search(r"\bwhat language am i learning\b", lower)
+        )
+        if language_query and is_question:
+            if mem["language"]:
+                return f"You are learning {mem['language'][0]}."
+            return "I do not have your language-learning memory saved yet."
+
+        dog_name_query = bool(
+            re.search(r"\bwhat(?:'s| is)?\s+my\s+dog(?:'s)?\s+name\b", lower)
+            or re.search(r"\bmy\s+dog(?:'s)?\s+name\b", lower)
+            or re.search(r"\bname of my dog\b", lower)
+        )
+        if dog_name_query and is_question:
+            if mem["pet"]:
+                return f"Your dog's name is {mem['pet'][0]}."
+            return "I do not have your dog name saved yet."
+
+        if ("do i have a dog" in lower or "have a dog" in lower) and is_question:
+            if mem["pet"]:
+                return f"Yes, you have a dog named {mem['pet'][0]}."
+            return "I do not have any dog information saved yet."
+
+        if ("am i training for" in lower or "am i training" in lower) and is_question:
+            if mem["training"]:
+                return f"Yes, you are training for {mem['training'][0]}."
+            return "I do not have your training goal saved yet."
+
+        drink_query = bool(
+            re.search(r"\bwhat do i drink\b", lower)
+            or re.search(r"\bwhat is the drink\b", lower)
+            or re.search(r"\bwhat drink do i\b", lower)
+            or re.search(r"\bdo i drink\b", lower)
+            or re.search(r"\bdrink i drink\b", lower)
+            or re.search(r"\bwhat do i prefer.*morning\b", lower)
+            or re.search(r"\bwhat .*prefer.*every morning\b", lower)
+        )
+        if drink_query and is_question:
+            if mem["routine"]:
+                return f"You told me you drink {mem['routine'][0]}."
+            return "I do not have your morning drink memory saved yet."
 
         allergy_query = bool(
             re.search(r"\bam i allergic\b", lower)
@@ -129,24 +203,63 @@ class LLMClient:
             or re.search(r"\bno nuts?\b", lower)
             or re.search(r"\bnut[- ]?free\b", lower)
         )
-        if allergy_query:
+        if allergy_query and is_question:
             if mem["allergy"]:
                 return f"You told me you are allergic to {', '.join(mem['allergy'])}."
             return "I do not have any allergy memory saved yet."
 
-        if "what do i like" in lower or "what i like" in lower or "what do i love" in lower:
+        if ("what do i like" in lower or "what i like" in lower or "what do i love" in lower) and is_question:
             likes = self._ordered_likes(mem)
             return f"You told me you like {', '.join(likes)}." if likes else "I do not have any saved preferences yet."
 
+        meal_pref_query = bool(
+            re.search(r"\bwhich meals?\b", lower)
+            or re.search(r"\bwhat meals?\b", lower)
+            or re.search(r"\bwhat food do i like\b", lower)
+            or re.search(r"\bwhich food do i like\b", lower)
+            or re.search(r"\bwhat do i prefer to eat\b", lower)
+            or re.search(r"\bwhat meals? i like\b", lower)
+        )
+        if meal_pref_query and is_question:
+            meal_prefs = mem["food"][:]
+            for d in mem["diet"]:
+                if d.lower() not in [x.lower() for x in meal_prefs]:
+                    meal_prefs.append(d)
+            if meal_prefs:
+                return f"You told me you like {', '.join(meal_prefs)}."
+            return "I do not have any saved meal preferences yet."
+
+        if is_question and (
+            ("which movie" in lower or "which movies" in lower or "what movie" in lower or "what movies" in lower)
+            and ("like" in lower or "watch" in lower)
+        ):
+            if mem["watch"]:
+                cleaned_watch = [re.sub(r"^watching\s+", "", v, flags=re.IGNORECASE) for v in mem["watch"]]
+                return f"You told me you like watching {', '.join(cleaned_watch)}."
+            return "I do not have any saved movie preferences yet."
+
         if "bestfriend" in lower or "best friend" in lower:
-            if ("my" in lower and "is" in lower) and ("bestfriend" in lower or "best friend" in lower):
+            if re.search(r"\bmy\s+best\s*friend\s+is\b", lower):
                 return "Thanks for sharing. I will remember that."
-            return f"Your best friend is {mem['relationship'][0]}." if mem["relationship"] else "I do not know your best friend yet."
+            if is_question:
+                return f"Your best friend is {mem['relationship'][0]}." if mem["relationship"] else "I do not know your best friend yet."
 
-        if "how's bruno" in lower or "how is bruno" in lower:
-            return "I cannot check Bruno in real time, but a short walk, water, and play time are usually great for him."
+        dog_status_query = bool(
+            re.search(r"\bhow(?:'s| is)\s+my\s+dog\b", lower)
+            or re.search(r"\bwhat(?:'s| is)\s+my\s+dog\s+doing\b", lower)
+            or re.search(r"\bhow(?:'s| is)\s+bruno\b", lower)
+            or re.search(r"\bwhat(?:'s| is)\s+bruno\s+doing\b", lower)
+        )
+        if dog_status_query and is_question:
+            if mem["pet"]:
+                dog_name = mem["pet"][0]
+                return (
+                    f"I cannot check {dog_name} in real time, but if {dog_name} seems active, "
+                    "a short play session, water, and a quick walk are good options."
+                )
+            return "I cannot check in real time, but dogs usually do well with water, play, and a short walk."
 
-        if (
+        if is_question and (
             "practice a new language" in lower
             or "practice language" in lower
             or ("learning spanish" in lower and any(x in lower for x in ["help", "practice", "can you", "how"]))
@@ -157,7 +270,7 @@ class LLMClient:
                 "3) one short listening clip and summary."
             )
 
-        if "prepare for my race" in lower or "prepare for race" in lower or ("race" in lower and "help" in lower):
+        if is_question and ("prepare for my race" in lower or "prepare for race" in lower or ("race" in lower and "help" in lower)):
             if mem["training"]:
                 return (
                     "For race prep: 1) easy run + strides, 2) hydration and carb-focused meal, "
@@ -165,7 +278,7 @@ class LLMClient:
                 )
             return "Race prep basics: structured training, hydration, recovery, and consistent sleep."
 
-        if "tea" in lower and ("coffee" in lower or "something else" in lower):
+        if is_question and "tea" in lower and ("coffee" in lower or "something else" in lower):
             if mem["routine"]:
                 return "Since you drink coffee in the morning, tea can be a calmer evening option. Herbal tea is good for late hours."
             return "Tea is a good lighter option, especially in the evening; coffee is better earlier in the day."
@@ -176,10 +289,30 @@ class LLMClient:
             picks = self._topic_suggestions(topic, mem, intent)
             return f"Here are 3 suggestions: 1) {picks[0]}, 2) {picks[1]}, 3) {picks[2]}."
 
-        if self._fallback_extract(user_message):
-            if mem["name"] and ("i am" in lower or "my name" in lower):
-                return f"Nice to meet you, {mem['name'][0]}. I will keep that in mind."
+        # Handle declarative updates that include request punctuation but are still facts.
+        if extracted_now:
+            if extracted_mem_now and extracted_mem_now["name"]:
+                return f"Nice to meet you, {extracted_mem_now['name'][0]}. I will keep that in mind."
             return "Got it. I will keep that in mind."
+
+        # Generic profile-memory lookup fallback for direct memory questions.
+        if self._looks_like_question(lower):
+            if "language" in lower and mem["language"]:
+                return f"You are learning {mem['language'][0]}."
+            if "drink" in lower and mem["routine"]:
+                return f"You told me you drink {mem['routine'][0]}."
+            if ("dog" in lower and "name" in lower) and mem["pet"]:
+                return f"Your dog's name is {mem['pet'][0]}."
+            if "dog" in lower and mem["pet"]:
+                return f"You have a dog named {mem['pet'][0]}."
+            if ("training" in lower or "race" in lower) and mem["training"]:
+                return f"You are training for {mem['training'][0]}."
+            if ("work" in lower or "job" in lower) and mem["occupation"]:
+                return f"You work as {mem['occupation'][0]}."
+            if "live" in lower and mem["location"]:
+                return f"You live in {mem['location'][0]}."
+            if "allerg" in lower and mem["allergy"]:
+                return f"You are allergic to {', '.join(mem['allergy'])}."
 
         return None
 
@@ -387,12 +520,39 @@ class LLMClient:
 
     def _fallback_extract(self, text: str) -> List[str]:
         facts: List[str] = []
+        lower_text = text.lower()
+        declarative_markers = [
+            "i am ",
+            "i'm ",
+            "my name is",
+            "my best friend is",
+            "my bestfriend is",
+            "i live in",
+            "i work as",
+            "i have a dog named",
+            "i prefer",
+            "my birthday is on",
+            "i am training for",
+            "i am learning",
+            "i drink ",
+            "i love ",
+            "i like ",
+            "i enjoy ",
+            "i am into ",
+            "i'm into ",
+        ]
+        # If it's a pure question with no declarative signal, do not extract facts.
+        if "?" in text and not any(marker in lower_text for marker in declarative_markers):
+            return []
+
         # Split both on sentence marks and commas to avoid merged facts.
         clauses = [c.strip() for c in re.split(r"[.!?,]", text) if c.strip()]
 
         for clause in clauses:
             low = clause.lower().strip()
             if self._looks_like_request(low):
+                continue
+            if self._looks_like_question_clause(low):
                 continue
 
             name_match = re.search(r"\b(?:i am|i'm|my name is)\s+([A-Za-z][A-Za-z'-]{1,30})\b", clause, flags=re.IGNORECASE)
@@ -454,6 +614,12 @@ class LLMClient:
                 if name:
                     facts.append(f"User's best friend is {name}")
 
+            best_friend_name = re.search(r"\bmy\s+best\s*friend\s+name\s+is\s+([A-Za-z][A-Za-z\s'-]*)", clause, flags=re.IGNORECASE)
+            if best_friend_name:
+                name = self._clean_pref(best_friend_name.group(1))
+                if name:
+                    facts.append(f"User's best friend is {name}")
+
         return facts
 
     def _clean_pref(self, text: str) -> str:
@@ -466,6 +632,32 @@ class LLMClient:
         )
         x = re.sub(r"\b(?:too|also|as well)\b$", "", x, flags=re.IGNORECASE).strip(" ,.")
         return x
+
+    def _is_pure_question(self, text: str) -> bool:
+        lower = text.lower()
+        declarative_markers = [
+            "i am ",
+            "i'm ",
+            "my name is",
+            "my best friend is",
+            "my bestfriend is",
+            "i live in",
+            "i work as",
+            "i have ",
+            "i prefer",
+            "my birthday is",
+            "i am training for",
+            "i am learning",
+            "i drink ",
+            "i love ",
+            "i like ",
+            "i enjoy ",
+            "i am into ",
+            "i'm into ",
+        ]
+        has_declarative = any(marker in lower for marker in declarative_markers)
+        looks_question = "?" in text or self._looks_like_question_clause(lower.strip())
+        return looks_question and not has_declarative
 
     def _looks_like_request(self, lower_text: str) -> bool:
         if re.search(r"\bsugg\w*\b", lower_text):
@@ -483,6 +675,40 @@ class LLMClient:
             "how can i",
             "i want",
             "help me",
+        ]
+        return any(lower_text.startswith(s) for s in starters)
+
+    def _looks_like_question(self, lower_text: str) -> bool:
+        starters = [
+            "what ",
+            "which ",
+            "who ",
+            "where ",
+            "when ",
+            "why ",
+            "how ",
+            "do i",
+            "am i",
+            "is my",
+            "are my",
+            "can i",
+        ]
+        return "?" in lower_text or any(lower_text.startswith(s) for s in starters)
+
+    def _looks_like_question_clause(self, lower_text: str) -> bool:
+        starters = [
+            "what ",
+            "which ",
+            "who ",
+            "where ",
+            "when ",
+            "why ",
+            "how ",
+            "do i",
+            "am i",
+            "is my",
+            "are my",
+            "can i",
         ]
         return any(lower_text.startswith(s) for s in starters)
 
@@ -528,7 +754,7 @@ class LLMClient:
             pref = re.search(r"^user (?:likes|loves|enjoys|prefers)\s+(.+)$", cleaned, flags=re.IGNORECASE)
             if pref:
                 val = self._clean_pref(pref.group(1))
-                if val:
+                if val and val.lower() not in {"to watch", "watch", "to eat", "eat"}:
                     out.append(f"User likes {val}")
                 continue
 

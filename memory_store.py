@@ -59,7 +59,10 @@ class MemoryStore:
 
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            self.memories = [Memory(**item) for item in raw]
+            loaded = [Memory(**item) for item in raw]
+            self.memories = [m for m in loaded if not self._is_invalid_memory(m.fact)]
+            if len(self.memories) != len(loaded):
+                self._save()
         except (json.JSONDecodeError, TypeError, KeyError):
             # Corrupt or unexpected file format: start fresh.
             self.memories = []
@@ -67,6 +70,16 @@ class MemoryStore:
     def _save(self) -> None:
         payload = [asdict(memory) for memory in self.memories]
         self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def _is_invalid_memory(self, fact: str) -> bool:
+        f = fact.strip().lower()
+        # Drop low-information fragments accidentally extracted from questions.
+        bad_exact = {"user likes to watch", "user likes to eat", "user likes to play", "user likes watch"}
+        if f in bad_exact:
+            return True
+        if f.startswith("user likes to ") and len(f.split()) <= 4:
+            return True
+        return False
 
     def clear(self) -> None:
         self.memories = []

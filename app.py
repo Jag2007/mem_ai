@@ -103,22 +103,6 @@ def main() -> None:
         for fact in relevant_facts + all_facts:
             if fact not in context_facts:
                 context_facts.append(fact)
-        profile_intent = any(
-            phrase in user_message.lower()
-            for phrase in [
-                "my name",
-                "who am i",
-                "what do i love",
-                "what do i like",
-                "allergic",
-                "best friend",
-                "bestfriend",
-                "where do i live",
-                "birthday",
-            ]
-        )
-        if profile_intent:
-            context_facts = [m.fact for m in memory_store.memories]
 
         conversation_history.append({"role": "user", "content": user_message})
         reply = llm.generate_reply(user_message, context_facts, conversation_history)
