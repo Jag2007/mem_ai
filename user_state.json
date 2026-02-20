@@ -1,0 +1,147 @@
+{
+  "profile": {
+    "name": {
+      "value": "Priya",
+      "confidence": 0.85,
+      "updated_at": "2026-02-20T05:18:18.238702+00:00",
+      "last_confirmed_at": "2026-02-20T05:18:18.238702+00:00",
+      "source_user_message": "My name is Priya",
+      "changes": 1
+    },
+    "birthday": {
+      "value": "April 12",
+      "confidence": 0.7,
+      "updated_at": "2026-02-20T05:18:18.238701+00:00",
+      "last_confirmed_at": "2026-02-20T05:18:18.238701+00:00",
+      "source_user_message": "My birthday is on April 12",
+      "changes": 1
+    },
+    "city": {
+      "value": "Bangalore",
+      "confidence": 0.85,
+      "updated_at": "2026-02-20T05:18:18.238653+00:00",
+      "last_confirmed_at": "2026-02-20T05:18:18.238653+00:00",
+      "source_user_message": "My name is Priya Sharma.   I live in Bangalore.   I am allergic to peanuts.   My favorite food is pasta.   I work as a software engineer.   My birthday is on July 14.   I have a cat named Luna.   I love watching sci-fi movies.   I graduated from Delhi University.   I am currently learning machine learning.",
+      "changes": 1
+    },
+    "occupation": {
+      "value": "ai engineer",
+      "confidence": 0.7,
+      "updated_at": "2026-02-20T05:18:18.238699+00:00",
+      "last_confirmed_at": "2026-02-20T05:18:18.238699+00:00",
+      "source_user_message": "I work as a ai engineer.",
+      "changes": 1
+    },
+    "morning_drink": null,
+    "allergies": [
+      {
+        "value": "peanuts",
+        "confidence": 0.85,
+        "updated_at": "2026-02-20T05:18:18.238657+00:00",
+        "last_confirmed_at": "2026-02-20T05:18:18.238657+00:00",
+        "source_user_message": "My name is Priya Sharma.   I live in Bangalore.   I am allergic to peanuts.   My favorite food is pasta.   I work as a software engineer.   My birthday is on July 14.   I have a cat named Luna.   I love watching sci-fi movies.   I graduated from Delhi University.   I am currently learning machine learning.",
+        "changes": 1
+      },
+      {
+        "value": "almonds",
+        "confidence": 0.85,
+        "updated_at": "2026-02-20T05:18:18.238697+00:00",
+        "last_confirmed_at": "2026-02-20T05:18:18.238697+00:00",
+        "source_user_message": "I am allergic to almonds.",
+        "changes": 1
+      }
+    ]
+  },
+  "relationships": {
+    "best_friend": null,
+    "dog_name": null
+  },
+  "goals": {
+    "learning": [],
+    "training": [],
+    "general": []
+  },
+  "preferences": {
+    "likes": {
+      "pasta": {
+        "value": "pasta",
+        "confidence": 0.82,
+        "updated_at": "2026-02-20T05:18:18.238683+00:00",
+        "last_confirmed_at": "2026-02-20T05:18:18.238683+00:00",
+        "source_user_message": "My name is Priya Sharma.   I live in Bangalore.   I am allergic to peanuts.   My favorite food is pasta.   I work as a software engineer.   My birthday is on July 14.   I have a cat named Luna.   I love watching sci-fi movies.   I graduated from Delhi University.   I am currently learning machine learning.",
+        "changes": 1
+      },
+      "watching sci-fi movies": {
+        "value": "watching sci-fi movies",
+        "confidence": 0.82,
+        "updated_at": "2026-02-20T05:18:18.238694+00:00",
+        "last_confirmed_at": "2026-02-20T05:18:18.238694+00:00",
+        "source_user_message": "My name is Priya Sharma.   I live in Bangalore.   I am allergic to peanuts.   My favorite food is pasta.   I work as a software engineer.   My birthday is on July 14.   I have a cat named Luna.   I love watching sci-fi movies.   I graduated from Delhi University.   I am currently learning machine learning.",
+        "changes": 1
+      },
+      "pizz": {
+        "value": "pizz",
+        "confidence": 0.57,
+        "updated_at": "2026-02-20T05:19:00.297698+00:00",
+        "last_confirmed_at": "2026-02-20T05:18:18.238705+00:00",
+        "source_user_message": "I like pizz",
+        "changes": 2
+      },
+      "pizza": {
+        "value": "pizza",
+        "confidence": 0.6299999999999999,
+        "updated_at": "2026-02-20T05:18:43.135962+00:00",
+        "last_confirmed_at": "2026-02-20T05:18:36.168786+00:00",
+        "source_user_message": "I like pizza",
+        "changes": 3
+      },
+      "oranges": {
+        "value": "oranges",
+        "confidence": 0.72,
+        "updated_at": "2026-02-20T05:22:23.247454+00:00",
+        "last_confirmed_at": "2026-02-20T05:22:23.247454+00:00",
+        "source_user_message": "I like oranges",
+        "changes": 1
+      },
+      "fish": {
+        "value": "fish",
+        "confidence": 0.78,
+        "updated_at": "2026-02-20T05:24:04.411839+00:00",
+        "last_confirmed_at": "2026-02-20T05:24:04.411839+00:00",
+        "source_user_message": "I like fish",
+        "changes": 1
+      }
+    },
+    "dislikes": {
+      "pizza": {
+        "value": "pizza",
+        "confidence": 0.55,
+        "updated_at": "2026-02-20T05:18:43.135973+00:00",
+        "last_confirmed_at": "2026-02-20T05:18:43.135973+00:00",
+        "source_user_message": "I don't like pizza",
+        "changes": 1
+      },
+      "pizz": {
+        "value": "pizz",
+        "confidence": 0.55,
+        "updated_at": "2026-02-20T05:19:00.297709+00:00",
+        "last_confirmed_at": "2026-02-20T05:19:00.297709+00:00",
+        "source_user_message": "i don't like pizz",
+        "changes": 1
+      }
+    }
+  },
+  "flags": {
+    "clarify_preferences": [
+      "pizza",
+      "pizz",
+      "oranges"
+    ],
+    "preference_flip_counts": {
+      "oranges": 2
+    }
+  },
+  "meta": {
+    "updated_at": "2026-02-20T05:24:04.412921+00:00"
+  }
+}

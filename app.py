@@ -82,12 +82,13 @@ def main() -> None:
             continue
 
         if user_message == "/mem":
-            if not memory_store.memories:
+            facts = memory_store.list_facts()
+            if not facts:
                 print("AI: No memories saved yet.")
             else:
                 print("AI: Stored memories:")
-                for idx, memory in enumerate(memory_store.memories, start=1):
-                    print(f"  {idx}. {memory.fact}")
+                for idx, fact in enumerate(facts, start=1):
+                    print(f"  {idx}. {fact}")
             continue
 
         if user_message == "/clear":

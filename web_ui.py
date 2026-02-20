@@ -57,7 +57,7 @@ class ChatEngine:
 
     def list_memories(self) -> List[str]:
         with self.lock:
-            return [m.fact for m in self.memory_store.memories]
+            return self.memory_store.list_facts()
 
     def handle_message(self, message: str) -> Dict[str, object]:
         user_message = message.strip()

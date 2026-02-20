@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 
 
 class LLMClient:
-    INVALID_NAME_TOKENS = {"learning", "allergic", "training", "foodie", "ok", "okay"}
+    INVALID_NAME_TOKENS = {"learning", "allergic", "training", "foodie", "ok", "okay", "preparing"}
     def __init__(self, model: str = "grok-2-latest"):
         self.api_key = os.getenv("GROK_API_KEY", "").strip() or os.getenv("OPENAI_API_KEY", "").strip()
         self.model = os.getenv("GROK_MODEL", "").strip() or os.getenv("OPENAI_MODEL", "").strip() or model
@@ -67,7 +67,7 @@ class LLMClient:
         system = (
             "Extract durable profile facts from the user message. "
             "Return JSON only: {\"facts\":[\"...\"]}. "
-            "Use canonical forms like: User's name is X, User likes Y, User is allergic to Z, "
+            "Use canonical forms like: User's name is X, User likes Y, User dislikes Y, User is allergic to Z, "
             "User lives in City, User works as Role, User has a dog named Name, User prefers vegetarian meals, "
             "User's birthday is on Date, User is training for Goal, User is learning Language, User drinks coffee every morning. "
             "Capture multiple facts if present. Ignore pure requests."
@@ -113,7 +113,7 @@ class LLMClient:
         if output:
             return output
 
-        return "I can help with that. Tell me what kind of suggestion you want."
+        return "I do not know about that yet. Tell me, and I will remember it."
 
     def _deterministic_reply(self, user_message: str, memory_facts: List[str]) -> Optional[str]:
         lower = user_message.lower()
@@ -157,12 +157,16 @@ class LLMClient:
             or re.search(r"\bam i learning (any )?language\b", lower)
             or re.search(r"\bwhat language am i learning\b", lower)
             or re.search(r"\bwhat am i learning\b", lower)
+            or re.search(r"\bwhat all am i learning\b", lower)
+            or re.search(r"\bwhat all do i learn\b", lower)
             or re.search(r"\bam i learning something\b", lower)
             or re.search(r"\bdo i learn (any )?language\b", lower)
         )
         if language_query and is_question:
             if mem["language"]:
-                return f"You are learning {mem['language'][0]}."
+                if len(mem["language"]) == 1:
+                    return f"You are learning {mem['language'][0]}."
+                return f"You are learning {', '.join(mem['language'])}."
             return "I do not have your language-learning memory saved yet."
 
         dog_name_query = bool(
@@ -179,6 +183,8 @@ class LLMClient:
             if mem["pet"]:
                 return f"Yes, you have a dog named {mem['pet'][0]}."
             return "I do not have any dog information saved yet."
+        if ("do i have a cat" in lower or "have a cat" in lower) and is_question:
+            return "I do not know if you have a cat yet. Tell me, and I will remember it."
 
         if ("am i training for" in lower or "am i training" in lower) and is_question:
             if mem["training"]:
@@ -215,6 +221,17 @@ class LLMClient:
             likes = self._ordered_likes(mem)
             return f"You told me you like {', '.join(likes)}." if likes else "I do not have any saved preferences yet."
 
+        if is_question and (
+            re.search(r"\bwhat do i dislike\b", lower)
+            or re.search(r"\bwhat i dislike\b", lower)
+            or re.search(r"\bdo i dislike anything\b", lower)
+            or re.search(r"\bwhat do i hate\b", lower)
+        ):
+            dislikes = mem.get("dislike", [])
+            if dislikes:
+                return f"You told me you dislike {', '.join(dislikes)}."
+            return "I do not have any saved dislikes yet. Tell me, and I will remember it."
+
         if is_question and re.search(r"\bdo i like\b", lower):
             phrase = re.sub(r".*\bdo i like\b", "", lower).strip(" ?.")
             if not phrase:
@@ -222,6 +239,7 @@ class LLMClient:
                 return f"You told me you like {', '.join(likes)}." if likes else "I do not have any saved preferences yet."
 
             likes = self._ordered_likes(mem)
+            dislikes = mem.get("dislike", [])
             match = None
             for item in likes:
                 item_low = item.lower()
@@ -230,9 +248,29 @@ class LLMClient:
                     break
             if match:
                 return f"Yes, you told me you like {match}."
+            for item in dislikes:
+                item_low = item.lower()
+                if phrase in item_low or item_low in phrase:
+                    return f"You told me you dislike {item}."
             if likes:
                 return f"I do not have that exact preference saved. I currently remember: {', '.join(likes)}."
             return "I do not have any saved preferences yet."
+
+        if is_question and re.search(r"\bdo i dislike\b", lower):
+            phrase = re.sub(r".*\bdo i dislike\b", "", lower).strip(" ?.")
+            dislikes = mem.get("dislike", [])
+            likes = self._ordered_likes(mem)
+            if not phrase:
+                return f"You told me you dislike {', '.join(dislikes)}." if dislikes else "I do not have any saved dislikes yet."
+            for item in dislikes:
+                item_low = item.lower()
+                if phrase in item_low or item_low in phrase:
+                    return f"Yes, you told me you dislike {item}."
+            for item in likes:
+                item_low = item.lower()
+                if phrase in item_low or item_low in phrase:
+                    return f"You told me you like {item}, not dislike it."
+            return "I do not know that yet. Tell me, and I will remember it."
 
         meal_pref_query = bool(
             re.search(r"\bwhich meals?\b", lower)
@@ -335,6 +373,7 @@ class LLMClient:
                 return f"You live in {mem['location'][0]}."
             if "allerg" in lower and mem["allergy"]:
                 return f"You are allergic to {', '.join(mem['allergy'])}."
+            return "I do not know about that yet. Tell me, and I will remember it."
 
         return None
 
@@ -446,6 +485,7 @@ class LLMClient:
             "animal": [],
             "watch": [],
             "music": [],
+            "dislike": [],
             "allergy": [],
             "relationship": [],
             "location": [],
@@ -499,6 +539,9 @@ class LLMClient:
             if low.startswith("user likes "):
                 val = f[len("User likes "):].strip()
                 out[self._classify_pref(val)].append(val)
+                continue
+            if low.startswith("user dislikes "):
+                out["dislike"].append(f[len("User dislikes "):].strip())
                 continue
             out["general"].append(f)
 
@@ -559,6 +602,10 @@ class LLMClient:
             "i drink ",
             "i love ",
             "i like ",
+            "i dislike ",
+            "i don't like ",
+            "i dont like ",
+            "i hate ",
             "i enjoy ",
             "i am into ",
             "i'm into ",
@@ -599,6 +646,17 @@ class LLMClient:
                     val = self._clean_pref(item)
                     if val:
                         facts.append(f"User likes {val}")
+
+            dislike_matches = re.findall(
+                r"\b(?:i\s+do\s+not\s+like|i\s+don't\s+like|i\s+dont\s+like|i\s+dislike|i\s+hate)\s+([^.!?]+)",
+                clause,
+                flags=re.IGNORECASE,
+            )
+            for block in dislike_matches:
+                for item in re.split(r",| and also | also | plus | & | and ", block, flags=re.IGNORECASE):
+                    val = self._clean_pref(item)
+                    if val:
+                        facts.append(f"User dislikes {val}")
 
             location = re.search(r"\bi live in\s+([A-Za-z][A-Za-z\s'-]*)$", clause, flags=re.IGNORECASE)
             if location:
@@ -655,7 +713,7 @@ class LLMClient:
     def _clean_pref(self, text: str) -> str:
         x = text.strip(" .,")
         x = re.sub(
-            r"^(?:i\s+also\s+like|i\s+too\s+like|i\s+love|i\s+like|i\s+enjoy|i\s+prefer|i\s+am\s+into|i'm\s+into|into|the|a|an)\s+",
+            r"^(?:i\s+also\s+like|i\s+too\s+like|i\s+love|i\s+like|i\s+enjoy|i\s+prefer|i\s+am\s+into|i'm\s+into|i\s+do\s+not\s+like|i\s+don't\s+like|i\s+dont\s+like|i\s+dislike|i\s+hate|into|the|a|an)\s+",
             "",
             x,
             flags=re.IGNORECASE,
@@ -681,6 +739,10 @@ class LLMClient:
             "i drink ",
             "i love ",
             "i like ",
+            "i dislike ",
+            "i don't like ",
+            "i dont like ",
+            "i hate ",
             "i enjoy ",
             "i am into ",
             "i'm into ",
@@ -786,6 +848,13 @@ class LLMClient:
                 val = self._clean_pref(pref.group(1))
                 if val and val.lower() not in {"to watch", "watch", "to eat", "eat"}:
                     out.append(f"User likes {val}")
+                continue
+
+            dislike_pref = re.search(r"^user (?:dislikes|does not like|doesn't like|hates)\s+(.+)$", cleaned, flags=re.IGNORECASE)
+            if dislike_pref:
+                val = self._clean_pref(dislike_pref.group(1))
+                if val:
+                    out.append(f"User dislikes {val}")
                 continue
 
             name = re.search(r"^user'?s?\s+name\s+is\s+(.+)$", cleaned, flags=re.IGNORECASE)
