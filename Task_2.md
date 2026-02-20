@@ -31,7 +31,7 @@ The following 10 factual memories were stored in the memory system:
 
 8. I love watching sci-fi movies.
 
-9. I graduated from Delhi University.
+9. I dislike apples.
 
 10. I am currently learning machine learning.
 
@@ -59,7 +59,7 @@ The following 10 queries were used to test retrieval performance:
 
 8. What kind of movies do I like?
 
-9. Where did I graduate from?
+9. What do i dislike?
 
 10. What am I currently studying?
 
@@ -85,26 +85,26 @@ This metric evaluates strict correctness.
 
 ## **4.1 Query-Level Evaluation Table**
 
-| Query No. | Query | Answered Correctly (Yes / No) |
-| ----- | ----- | ----- |
-| 1 | What is my name? | Yes |
-| 2 | Where do I live? | Yes |
-| 3 | Do I have any allergies? | Yes |
-| 4 | What is my favorite food? | No |
-| 5 | What do I do for work? | Yes |
-| 6 | When is my birthday? | Yes |
-| 7 | Do I have a cat? | Yes |
-| 8 | What kind of movies do I like? | Yes |
-| 9 | Where did I graduate from? | No |
-| 10 | What am I currently studying? | No |
+| Query No. | Query                          | Answered Correctly (Yes / No) |
+| --------- | ------------------------------ | ----------------------------- |
+| 1         | What is my name?               | Yes                           |
+| 2         | Where do I live?               | Yes                           |
+| 3         | Do I have any allergies?       | Yes                           |
+| 4         | What is my favorite food?      | Yes                           |
+| 5         | What do I do for work?         | Yes                           |
+| 6         | When is my birthday?           | Yes                           |
+| 7         | Do I have a cat?               | Yes                           |
+| 8         | What kind of movies do I like? | Yes                           |
+| 9         | What do i dislike?             | Yes                           |
+| 10        | What am I currently studying?  | No                            |
 
 ---
 
 ## **4.2 Summary Results**
 
- Total Queries: 10  
- Correct Retrievals: 7   
- Accuracy: 70 %
+Total Queries: 10  
+ Correct Retrievals: 9
+Accuracy: 90 %
 
 ---
 
@@ -112,19 +112,19 @@ This metric evaluates strict correctness.
 
 ## **What Worked**
 
-* The system performed well for direct factual questions.
+- The system performed well for direct factual questions.
 
-* Queries with similar wording to stored memories showed high accuracy.
+- Queries with similar wording to stored memories showed high accuracy.
 
-* Clear one-fact-per-memory structure improved retrieval precision.
+- Clear one-fact-per-memory structure improved retrieval precision.
 
 ## **What Failed**
 
-* Slight variations in phrasing reduced exact match accuracy.
+- Slight variations in phrasing reduced exact match accuracy.
 
-* Semantic variations (e.g., "profession" vs "work") and similar words with a differing verb form also impacted performance .
+- Semantic variations (e.g., "profession" vs "work") and similar words with a differing verb form also impacted performance .
 
-* Some responses were partially relevant but not exact matches.
+- Some responses were partially relevant but not exact matches.
 
 ---
 
@@ -136,11 +136,10 @@ However, performance decreases when semantic variation increases. This indicates
 
 To improve performance, future enhancements may include:
 
-* Embedding-based semantic similarity
+- Embedding-based semantic similarity
 
-* Context-aware ranking
+- Context-aware ranking
 
-* Improved scoring mechanisms
+- Improved scoring mechanisms
 
 Overall, the system performs well for direct keyword-aligned queries but lacks robustness when handling paraphrased or semantically similar inputs. This highlights the need for more advanced semantic retrieval techniques to make the system production-ready and adaptable to real-world query variations.
-
